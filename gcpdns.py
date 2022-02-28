@@ -16,6 +16,8 @@ import re
 
 from google.oauth2 import service_account
 from google.cloud import dns
+from apiclient import errors
+from apiclient.discovery import build
 import publicsuffix2
 import click
 
@@ -28,7 +30,6 @@ ZONE_CACHE = dict()
 QUOTE_SPACE = re.compile(r"""["'`]\s*""")
 
 logger = logging.getLogger(__name__)
-
 
 class ZoneNotFound(ValueError):
     """Raised when a requested zone is not found"""
@@ -92,7 +93,7 @@ class DNSClient(dns.Client):
                     "A conflicting zone already exists: {0} ({1})".format(
                         zone.dns_name, zone.name
                     ))
-        self.zone(name, dns_name=dns_name, description=description).create()
+            self.zone(name, dns_name=dns_name, description=description).create()
 
     def delete_zone(self, zone_name):
         """
@@ -106,15 +107,52 @@ class DNSClient(dns.Client):
         """
         self.get_zone(zone_name).delete()
 
-    def dump_zones(self, records=False):
+    def dump_zones(self, records=False, service=None):
         """
         Outputs all managed zones  for the project in JSON and CSV format
 
         Returns:
             dict: A dictionary with a csv and json key
         """
+        print("Dumping zones")
         zones = []
         for zone in self.list_zones():
+
+            # Get DNSSEC info
+            zone_DS = ""
+            if service:
+                # https://www.iana.org/assignments/ds-rr-types/ds-rr-types.xhtml
+                digest_types = {
+                    'sha1': 1,
+                    'sha256': 2,
+                    'sha384': 4
+                }
+                # https://www.iana.org/assignments/dns-sec-alg-numbers/dns-sec-alg-numbers.xhtml
+                algorithm_num = {
+                    'rsasha1': 5,
+                    'rsasha256': 8,
+                    'rsasha512': 10,
+                    'ecdsap256sha256': 13,
+                    'ecdsap384sha384': 14
+                }
+
+                try:
+
+                    response = service.dnsKeys().list(project=zone.project,
+                                                    managedZone=zone.name).execute()
+                    if 'dnsKeys' in response and response['dnsKeys']:
+                        key = response['dnsKeys'][0]
+                        keyTag = key['keyTag']
+                        algo_num = algorithm_num[key['algorithm']] if key['algorithm'] in algorithm_num else 8
+                        d_type = key['digests'][0]['type']
+                        d_type_num = digest_types[d_type] if d_type in digest_types else 2
+                        digest = key['digests'][0]['digest']
+
+                        zone_DS = f'{keyTag} {algo_num} {d_type_num} {digest}'
+                except errors.HttpError as error:
+                    if error.status_code != 404:
+                        print(f'An error occurred gathering DS info: {error}')  
+
             record_list = []
             if records:
                 for record in zone.list_resource_record_sets():
@@ -130,14 +168,15 @@ class DNSClient(dns.Client):
                 created=zone.created.isoformat(),
                 description=zone.description,
                 name_servers=zone.name_servers,
-                zone_records=record_list
+                zone_records=record_list,
+                zone_ds = zone_DS
                 )
             
             zones.append(zone_dict)
         _json = json.dumps(zones, indent=2, ensure_ascii=False)
         csv_str = io.StringIO()
         csv_fields = ["dns_name", "name", "created",
-                      "description", "name_servers", "zone_records"]
+                      "description", "name_servers", "zone_records", "zone_ds"]
         csv_rows = zones.copy()
         for zone in csv_rows:
             zone["name_servers"] = "|".join(zone["name_servers"])
@@ -172,7 +211,6 @@ class DNSClient(dns.Client):
                 data=record.rrdatas
             )
             records.append(record_dict)
-
         _json = json.dumps(records, indent=2, ensure_ascii=False)
         csv_str = io.StringIO()
         csv_fields = ["name", "record_type", "ttl", "data"]
@@ -496,6 +534,7 @@ class _CLIConfig(object):
             credential_file, scopes=scopes)
         self.client = DNSClient(credentials=credentials,
                                 project=credentials.project_id)
+        self.service = build(serviceName='dns', version='v1', credentials=credentials)
 
 
 @click.group()
@@ -558,7 +597,7 @@ def _delete_zone(ctx, name):
 def _dump_zones(ctx, format_, output, records):
     """Dump a list of DNS zones."""
     try:
-        zones = ctx.obj.client.dump_zones(records)
+        zones = ctx.obj.client.dump_zones(records, ctx.obj.service)
         if len(output) == 0:
             click.echo(zones[format_])
         else:
