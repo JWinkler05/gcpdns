@@ -70,7 +70,7 @@ class DNSClient(dns.Client):
                 return zone
         raise ZoneNotFound("The zone named {0} was not found".format(name))
 
-    def create_zone(self, dns_name, name=None, description=None):
+    def create_zone(self, dns_name, name=None, description=None, dnssec=False):
         """
         Creates a DNS zone
 
@@ -78,6 +78,7 @@ class DNSClient(dns.Client):
             dns_name (str): The zone's DNS name
             name (str): the zone's GCP name
             description (str): A description of the zone
+            dnssec (boolean): Whether or not to turn dnssec on for the zone
 
         Raises:
             gcpdns.ZoneConflict
@@ -93,6 +94,9 @@ class DNSClient(dns.Client):
                     "A conflicting zone already exists: {0} ({1})".format(
                         zone.dns_name, zone.name
                     ))
+        if dnssec:
+            self.zone(name, dns_name=dns_name, description=description, dnssec='on').create()
+        else:
             self.zone(name, dns_name=dns_name, description=description).create()
 
     def delete_zone(self, zone_name):
@@ -155,6 +159,7 @@ class DNSClient(dns.Client):
 
             record_list = []
             if records:
+                print("has records")
                 for record in zone.list_resource_record_sets():
                     record_dict = {
                         "name": record.name,
