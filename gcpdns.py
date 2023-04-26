@@ -94,10 +94,14 @@ class DNSClient(dns.Client):
                     "A conflicting zone already exists: {0} ({1})".format(
                         zone.dns_name, zone.name
                     ))
-        if dnssec:
-            self.zone(name, dns_name=dns_name, description=description, dnssec='on').create()
-        else:
-            self.zone(name, dns_name=dns_name, description=description).create()
+
+        new_zone = self.zone(name, dns_name=dns_name, description=description)
+        new_zone.create()
+
+        #DNSSEC seems to be broken withing the code base right now:
+        # https://github.com/googleapis/python-dns/issues/32
+        # This doesn't work via python: https://cloud.google.com/dns/docs/dnssec-config#gcloud_1
+        # There is a script created to enable dnssec after creating the domains based on a file.
 
     def delete_zone(self, zone_name):
         """
@@ -421,7 +425,7 @@ class DNSClient(dns.Client):
             elif action == "create":
                 try:
                     self.create_zone(dns_name=dns_name, name=gcp_name,
-                                     description=description)
+                                     description=description, dnssec=True)
                 except ZoneConflict as e:
                     error = "Line {0}: {1}".format(reader.line_num,
                                                    e.__str__())
