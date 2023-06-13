@@ -52,6 +52,7 @@ class CSVError(ValueError):
 
 
 class DNSClient(dns.Client):
+    LIST_ZONES = None
     """An extended Google DNS client with helper functions"""
     def get_zone(self, name):
         """
@@ -64,8 +65,11 @@ class DNSClient(dns.Client):
             gcpdns.ZoneNotFound
         """
         dns_name = "{0}.".format(name.lower().rstrip("."))
-        zones = self.list_zones()
-        for zone in zones:
+
+        if not self.LIST_ZONES:
+            self.LIST_ZONES = self.list_zones()
+
+        for zone in self.LIST_ZONES:
             if zone.name == name or zone.dns_name == dns_name:
                 return zone
         raise ZoneNotFound("The zone named {0} was not found".format(name))
